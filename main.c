@@ -327,7 +327,7 @@ int message_type_determination(struct message received, int fd)
         // if (!leader_fd) {
         //     leader_fd = fd;
         // }
-        // fprintf(stderr, "receiving REQ from %d\n", received.id+1);
+        fprintf(stderr, "receiving REQ from %d\n", received.id+1);
 
         receive_req_send_ok(received); // done and checked need to test
     }
@@ -344,7 +344,7 @@ int message_type_determination(struct message received, int fd)
 
     if (received.m == OK)
     {
-        // fprintf(stderr, "receiving OK from %d\n", received.id+1);
+        fprintf(stderr, "receiving OK from %d\n", received.id+1);
         // fprintf(stderr, "current member count %d", current_operation.member_count);
         ok_count++;
 
@@ -521,7 +521,7 @@ int receive_req_send_ok(struct message received)
     }
     else
     {
-        // fprintf(stderr, "OK SENT\n");
+        fprintf(stderr, "OK SENT\n");
     }
 
     free(m.membership_list);
@@ -701,9 +701,9 @@ int send_newleader()
 
     for (int i = 0; i < current_operation.member_count; i++)
     {
-        if (current_operation.membership_list[i] == leader_id) {
-            continue;
-        }
+        // if (current_operation.membership_list[i] == leader_id) {
+        //     continue;
+        // }
 
         // fprintf(stderr, "current_operation.member_list[%d] : %d\n", i, current_operation.membership_list[i]);
         if ((nbytes = write_to_socket(peer_fd[current_operation.membership_list[i]], buffer, buffer_size)) != 0)
@@ -744,7 +744,7 @@ int receive_newleader(struct message received)
     char *buffer = (char *)malloc(buffer_size);
     serialize_message(&m, buffer, buffer_size);
     // fprintf(stderr, "Serialized message\n");
-
+    leader_fd = peer_fd[leader_id + 1];
     if ((nbytes = write_to_socket(leader_fd, buffer, buffer_size)) != 0)
     {
         fprintf(stderr, "error writing my message\n");
@@ -1204,7 +1204,6 @@ void handle_peer_failure(int peer_id) {
     }
 
     if (is_leader == 0 && leader_id == peer_id) {
-        leader_fd = peer_fd[current_operation.membership_list[leader_id + 1]];
         leader_delete_member(peer_id);
         current_operation.member_count--;
         fprintf(stderr, "deleting old leader from list: ");
