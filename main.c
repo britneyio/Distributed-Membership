@@ -72,6 +72,7 @@ struct message current_operation;
 // current peer id
 int id;
 pthread_mutex_t hb_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t coml_mutex = PTHREAD_MUTEX_INITIALIZER;
 int heartbeat_count = 0;
 int *heartbeat_list;
 int peer_crashed = 0;
@@ -111,14 +112,13 @@ int receive_newview_updateview(struct message recieved);
 int create_udp_listen(struct addrinfo hints, struct addrinfo *servinfo, struct addrinfo *p);
 int initialize_heartbeat_list(struct addrinfo hints, struct addrinfo *servinfo, struct addrinfo *p);
 int heartbeart_recvfrom(int listener_fd);
-int heartbeat_send();
+int heartbeat_send(struct addrinfo hints, struct addrinfo *servinfo, struct addrinfo *p);
 // every peer broadcast heartbeat
 // increment heartbeat_list at the peer_fd when it receives
 // heartbeat from that peer
 int receive_heartbeat(int peer_fd);
 // if heartbeat_count == 3 and there is a peer in the list that doesnt have a count of 2
-int failure();
-int create_udp_peer_list(struct addrinfo hints, struct addrinfo *servinfo, struct addrinfo *p);
+
 
 
 // Testcase 3
@@ -146,11 +146,10 @@ void serialize_message(const struct message *msg, char *buffer, int buffer_size)
 void unserialize_message(char *buffer, int buffer_size, struct message *msg);
 int write_to_socket(int socket_fd, const char *data, size_t size);
 void *timerThread(void *arg);
-int heartbeat_send();
 void handle_peer_failure(int peer_id);
+void leader_delete_member(int valueToRemove);
 int max(int a, int b);
 // create a list of fd to send over udp
-
 int main(int argc, char *argv[])
 {
     fd_set read_fds; // read_fds file descriptor list for tcp
@@ -199,7 +198,6 @@ int main(int argc, char *argv[])
 
     // set up send socket for all peers
     initialize_peer_send_list(hints, servinfo, p);
-    create_udp_peer_list(hints, servinfo,p);
 
     if (is_leader == 1)
     {
@@ -244,12 +242,12 @@ int main(int argc, char *argv[])
 
     while (1)
     {
-        if(leader_will_crash == 1) {
-            if (current_operation.member_count == peer_count) {
-                send_req(current_operation, DEL);
-                exit(0);
-            }
-        }
+        // if(leader_will_crash == 1) {
+        //     if (current_operation.member_count == peer_count) {
+        //         send_req(current_operation, DEL);
+        //         exit(0);
+        //     }
+        // }
 
         read_fds = master_fds;
         if (select(fdmax + 1, &read_fds, NULL, NULL, &timeout) == -1)
@@ -287,7 +285,7 @@ int main(int argc, char *argv[])
                 }
 
                 else if(i == udp_listener) {
-                                heartbeart_recvfrom(udp_listener);
+                    heartbeart_recvfrom(udp_listener);
 
                 }
 
@@ -329,7 +327,7 @@ int message_type_determination(struct message received, int fd)
         // if (!leader_fd) {
         //     leader_fd = fd;
         // }
-        fprintf(stderr, "receiving REQ from %d\n", received.id+1);
+        // fprintf(stderr, "receiving REQ from %d\n", received.id+1);
 
         receive_req_send_ok(received); // done and checked need to test
     }
@@ -337,7 +335,7 @@ int message_type_determination(struct message received, int fd)
     // leader receives join, join will only contain peer id
     if (received.m == JOIN)
     {
-        fprintf(stderr, "receiving JOIN from %d\n", received.id+1);
+        // fprintf(stderr, "receiving JOIN from %d\n", received.id+1);
         if (1 == is_leader)
         {
             send_req(received, ADD);
@@ -346,13 +344,18 @@ int message_type_determination(struct message received, int fd)
 
     if (received.m == OK)
     {
-        fprintf(stderr, "receiving OK from %d\n", received.id+1);
+        // fprintf(stderr, "receiving OK from %d\n", received.id+1);
         // fprintf(stderr, "current member count %d", current_operation.member_count);
         ok_count++;
 
         if (1 == is_leader && ok_count == current_operation.member_count)
         {
-            fprintf(stderr, "received all\n");
+            // fprintf(stderr, "received all\n");
+            receive_ok_newview(received);
+            ok_count = 0;
+        }
+
+        if (1 == is_leader && received.op == DEL && ok_count == current_operation.member_count - 1) {
             receive_ok_newview(received);
             ok_count = 0;
         }
@@ -361,11 +364,10 @@ int message_type_determination(struct message received, int fd)
 
     if (received.m == NEWVIEW)
     {
-        fprintf(stderr, "receiving NEWVIEW from %d\n", received.id);
+        // fprintf(stderr, "receiving NEWVIEW from %d\n", received.id);
 
         receive_newview_updateview(received);
-
-        if (crash_delay != 0)
+                if (current_operation.member_count == 5 && crash_delay != 0)
         {
             sleep(crash_delay);
             exit(0);
@@ -407,7 +409,7 @@ int send_join()
     }
     else
     {
-        fprintf(stderr, "JOIN SENT\n");
+        // fprintf(stderr, "JOIN SENT\n");
     }
     free(buffer);
     free(m.membership_list);
@@ -416,8 +418,13 @@ int send_join()
 
 int send_req(struct message recieved, enum operationType op)
 {
+    // if (op == DEL) {
+    //     leader_delete_member(recieved.id);
+    //     current_operation.member_count--;
+    // }
     fprintf(stderr, "sending REQ\n");
     current_operation.peer_id = recieved.id;
+    fprintf(stderr, "peer_id: %d\n",recieved.id);
     struct message m;
     m.request_id = current_operation.request_id;
     m.currentView_id = current_operation.currentView_id;
@@ -446,18 +453,13 @@ int send_req(struct message recieved, enum operationType op)
         
         //     continue;
         // }
-        // fprintf(stderr, "send req[%d]: %d", i, current_operation.membership_list[i]);
-        int value = peer_fd[current_operation.membership_list[i]];
-        fprintf(stderr, "sending to peer_fd[%d]: %d\n", current_operation.membership_list[i], peer_fd[current_operation.membership_list[i]]);
-        fprintf(stderr, "value: %d\n", value);
-
         if ((nbytes = write_to_socket(peer_fd[current_operation.membership_list[i]], buffer, buffer_size)) != 0)
         {
             fprintf(stderr, "error writing my message\n");
         }
         else
         {
-            fprintf(stderr, "%d REQ SENT to %d\n", op, current_operation.membership_list[i]+1);
+            // fprintf(stderr, "%d REQ SENT to %d\n", op, current_operation.membership_list[i]+1);
         }
     }
     free(buffer);
@@ -500,7 +502,7 @@ int receive_req_send_ok(struct message received)
     }
     else
     {
-        fprintf(stderr, "OK SENT\n");
+        // fprintf(stderr, "OK SENT\n");
     }
 
     free(m.membership_list);
@@ -515,11 +517,17 @@ int leader_add_member()
     new_size++;
     int *output = malloc(new_size * sizeof(int));
     memset(output, 0, new_size * sizeof(int));
-    create_membership_list(current_operation.membership_list, current_operation.peer_id, current_operation.member_count, output);
+        for (int i = 0; i < new_size; i++)
+    {
+          output[i] = current_operation.membership_list[i];
+    }
+
+    output[new_size-1] = current_operation.peer_id;
     // fprintf(stderr, "output:\n");
     // print_member_array(output, new_size);
-    free(current_operation.membership_list);
-    current_operation.membership_list = malloc(new_size * sizeof(int));
+    memset(current_operation.membership_list, 0, new_size * sizeof(int));
+
+    current_operation.membership_list = realloc(current_operation.membership_list, new_size * sizeof(int));
     for (int i = 0; i < new_size; i++)
     {
         current_operation.membership_list[i] = output[i];
@@ -529,38 +537,28 @@ int leader_add_member()
     free(output);
 }
 
-int leader_delete_member(int peer_id)
-{
-int size;
-    // Find the index of the element to be removed
-
-    for (int i = 0; i < current_operation.member_count; ++i)
-    {
-        if (current_operation.membership_list[i] == peer_id)
-        {
-            // Shift elements to fill the gap
-            for (int j = i; j < current_operation.member_count - 1; ++j)
-            {
-                current_operation.membership_list[j] = current_operation.membership_list[j + 1];
-            }
-
-            // Resize the array
-             size = current_operation.member_count - 1;
-
-            // Reallocate memory to adjust the size
-            current_operation.membership_list = (int *)realloc(current_operation.membership_list, size * sizeof(int));
-            if (current_operation.membership_list == NULL)
-            {
-                fprintf(stderr, "Memory reallocation failed\n");
-                return 1;
-            }
-
-            // Exit the loop as the element is found and removed
-            break;
+void leader_delete_member(int valueToRemove) {
+    int i, j;
+    int new_size = current_operation.member_count - 1;
+    int *output = malloc(new_size * sizeof(int));
+    memset(output, 0, new_size * sizeof(int));
+    // Iterate through the array to find the value
+    for (i = 0; i < current_operation.member_count; ++i) {
+        if (current_operation.membership_list[i] !=  valueToRemove) {
+            output[i] = current_operation.membership_list[i];
         }
     }
+    
+    current_operation.membership_list = realloc(current_operation.membership_list , new_size * sizeof(int));
+    memset(current_operation.membership_list,0, new_size * sizeof(int));
 
-        print_member_array(current_operation.membership_list, size);
+        for (int i = 0; i < new_size; i++)
+    {
+        current_operation.membership_list[i] = output[i];
+    }
+
+    free(output);
+
 
 }
 
@@ -579,6 +577,7 @@ int receive_ok_newview(struct message received)
     {
         leader_delete_member(received.peer_id);
         current_operation.member_count--;
+        peer_crashed = 0;
     }
 
     m.currentView_id = current_operation.currentView_id;
@@ -587,17 +586,17 @@ int receive_ok_newview(struct message received)
     current_operation.request_id++;
     m.id = current_operation.id;
     m.member_count = current_operation.member_count;
-    m.op = NOTHING;
+    m.op = received.op;
     m.peer_id = current_operation.peer_id; // peer being added
     m.membership_list = malloc(m.member_count * sizeof(int));
-    memset(m.membership_list, 0, sizeof(m.membership_list));
+    memset(m.membership_list, 0, m.member_count * sizeof(int));
 
     for (int i = 0; i < m.member_count; i++)
     {
         m.membership_list[i] = current_operation.membership_list[i];
     }
-    fprintf(stderr, "newview stuff");
-    print_member_array(m.membership_list, m.member_count);
+    // fprintf(stderr, "newview stuff");
+    // print_member_array(m.membership_list, m.member_count);
 
     int nbytes;
     int buffer_size = sizeof(int) * 3 + sizeof(enum messageType) + sizeof(enum operationType) +
@@ -605,6 +604,10 @@ int receive_ok_newview(struct message received)
     char *buffer = (char *)malloc(buffer_size);
     serialize_message(&m, buffer, buffer_size);
     // fprintf(stderr, "Serialized message\n");
+                fprintf(stderr, "NEWVIEW SENT\n");
+                //print_member_array(current_operation.membership_list, current_operation.member_count);
+                print_member_array(m.membership_list, m.member_count);
+
 
     for (int i = 0; i < current_operation.member_count; i++)
     {
@@ -615,7 +618,7 @@ int receive_ok_newview(struct message received)
         }
         else
         {
-            fprintf(stderr, "NEWVIEW SENT to %d\n", current_operation.membership_list[i] + 1);
+            // fprintf(stderr, "NEWVIEW SENT to %d\n", current_operation.membership_list[i] + 1);
         }
     }
 
@@ -626,12 +629,15 @@ int receive_ok_newview(struct message received)
 
 int receive_newview_updateview(struct message received)
 {
-    current_operation.currentView_id = received.currentView_id;
+        current_operation.currentView_id = received.currentView_id;
     current_operation.peer_id = received.peer_id;
+    // fprintf(stderr, "update view: ");
+    // print_member_array(received.membership_list, received.member_count);
 
-    current_operation.membership_list = realloc(current_operation.membership_list, received.member_count * sizeof(int));
-    memset(current_operation.membership_list, 0, sizeof(current_operation.membership_list));
-    for (int i = 0; i < received.member_count; i++)
+    free(current_operation.membership_list);
+    current_operation.membership_list = malloc(received.member_count * sizeof(int));
+    memset(current_operation.membership_list , 0, received.member_count * sizeof(int));
+        for (int i = 0; i < received.member_count; i++)
     {
         current_operation.membership_list[i] = received.membership_list[i];
     }
@@ -705,12 +711,6 @@ int create_send_socket(struct addrinfo hints, struct addrinfo *servinfo, struct 
     char ipstr[100];
     int status;
 
-char *PORT;
-if (token == 1) {
-    PORT = strdup(UDP);
-} else {
-    PORT = strdup(MYPORT);
-}
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
     hints.ai_flags = AI_PASSIVE;
@@ -719,7 +719,7 @@ if (token == 1) {
     } else {
     hints.ai_socktype = SOCK_STREAM;
     }
-    if ((status = getaddrinfo(host, PORT, &hints, &servinfo)) != 0)
+    if ((status = getaddrinfo(host, MYPORT, &hints, &servinfo)) != 0)
     {
         fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
         exit(1);
@@ -753,24 +753,15 @@ if (token == 1) {
             int flags = fcntl(sock_fd, F_GETFL, 0);
         fcntl(sock_fd, F_SETFL, flags | O_NONBLOCK);
 
-        if (token == 1) {
-            udp_addr_list[udp_addr_i] = p->ai_addr;
-            udp_addr_len[udp_addr_i] = p->ai_addrlen;
-            udp_addr_i++;
-        }
 
     freeaddrinfo(servinfo);
 
-    // fprintf(stderr, "connecting on interface: %s\n", ipstr);
-    free(PORT);
     return sock_fd;
 }
 
 int create_socket_and_bind(struct addrinfo hints, struct addrinfo *servinfo, struct addrinfo *p)
 {
     int sock_fd;
-    // fprintf(stderr, "Listening socket pthread created\n");
-    char ipstr[100];
     int status;
 
     memset(&hints, 0, sizeof hints);
@@ -787,24 +778,7 @@ int create_socket_and_bind(struct addrinfo hints, struct addrinfo *servinfo, str
 
     for (p = servinfo; p != NULL; p = p->ai_next)
     {
-        void *ina;
-
-        /** step 1 **/
-        if (p->ai_family == AF_INET)
-        { // IPv4
-            struct sockaddr_in *sa4 = (struct sockaddr_in *)p->ai_addr;
-            ina = &(sa4->sin_addr);
-        }
-        else
-        { // IPv6
-            struct sockaddr_in6 *sa6 = (struct sockaddr_in6 *)p->ai_addr;
-            ina = &(sa6->sin6_addr);
-        }
-
-        /** step 2 **/
-        inet_ntop(p->ai_family, ina, ipstr, sizeof ipstr);
-
-        /** step 3 **/
+    
         if ((sock_fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
         {
             perror("server: socket");
@@ -830,10 +804,6 @@ int create_socket_and_bind(struct addrinfo hints, struct addrinfo *servinfo, str
    if (servinfo != NULL) {
     freeaddrinfo(servinfo);
 }
-
-
-    // fprintf(stderr, "Listening on interface: %s\n", ipstr);
-
     return sock_fd;
 }
 
@@ -912,43 +882,10 @@ void initialize_peer_send_list(struct addrinfo hints, struct addrinfo *servinfo,
 
 }
 
-int create_udp_peer_list(struct addrinfo hints, struct addrinfo *servinfo, struct addrinfo *p) {
-    udp_fd = (int*) malloc((peer_count) * sizeof(int));
-    memset(udp_fd, 0, sizeof(int) * peer_count);
-    for (int i = 0; i < peer_count; i++)
-    {
 
-        udp_fd[i] = create_send_socket(hints, servinfo, p, peer_list[i], 1);
-
-    }
-
-}
-
-void create_membership_list(int *member_list, int new_member, int size, int *output)
-{
-    if (new_member == -1)
-    {
-        perror("peer id doesnt exist");
-        return;
-    }
-    // Increment the size of the list
-    int new_size = size + 1;
-
-    // Allocate memory for the new list
-    // Copy elements from the old list to the new list
-    for (int i = 0; i < size; i++)
-    {
-        output[i] = member_list[i];
-    }
-    // Add the new element to the end of the new list
-    output[new_size - 1] = new_member;
-
-    return;
-}
 
 void free_allocated_memory()
 {
-    free(udp_fd);
     free(peer_list);
     free(peer_fd);
     free(file);
@@ -990,30 +927,21 @@ void print_member_array(const int *arr, int size)
 }
 
 
-void print_any_array(const int *arr, int size)
-{
-    // fprintf(stderr, "current membership list: ");
-    for (int i = 0; i < size; i++)
-    {
-        fprintf(stderr, "%d ", arr[i]);
-    }
-    fprintf(stderr, "\n"); // Add a newline at the end
-}
-
 void serialize_message(const struct message *msg, char *buffer, int buffer_size)
 {
-    // fprintf(stderr, "Top of serialize_message\n");
     int offset = 0;
 
-    memcpy(buffer + offset, &(msg->id), sizeof(int));
+    // Convert values to network byte order before serialization
+    int id_network = htonl(msg->id);
+    memcpy(buffer + offset, &id_network, sizeof(int));
     offset += sizeof(int);
 
-    // fprintf(stderr, "First serialization successful\n");
-
-    memcpy(buffer + offset, &(msg->request_id), sizeof(int));
+    int request_id_network = htonl(msg->request_id);
+    memcpy(buffer + offset, &request_id_network, sizeof(int));
     offset += sizeof(int);
 
-    memcpy(buffer + offset, &(msg->currentView_id), sizeof(int));
+    int currentView_id_network = htonl(msg->currentView_id);
+    memcpy(buffer + offset, &currentView_id_network, sizeof(int));
     offset += sizeof(int);
 
     memcpy(buffer + offset, &(msg->m), sizeof(enum messageType));
@@ -1022,16 +950,20 @@ void serialize_message(const struct message *msg, char *buffer, int buffer_size)
     memcpy(buffer + offset, &(msg->op), sizeof(enum operationType));
     offset += sizeof(enum operationType);
 
-    memcpy(buffer + offset, &(msg->member_count), sizeof(int));
+    int member_count_network = htonl(msg->member_count);
+    memcpy(buffer + offset, &member_count_network, sizeof(int));
     offset += sizeof(int);
 
-    memcpy(buffer + offset, &(msg->peer_id), sizeof(int));
+    int peer_id_network = htonl(msg->peer_id);
+    memcpy(buffer + offset, &peer_id_network, sizeof(int));
     offset += sizeof(int);
 
-    // fprintf(stderr, "non membership list successful\n");
-
-    memcpy(buffer + offset, msg->membership_list, sizeof(int) * (msg->member_count));
-    offset += sizeof(int) * (msg->member_count);
+    // Convert membership_list values to network byte order before serialization
+    for (int i = 0; i < msg->member_count; ++i) {
+        int membership_list_element_network = htonl(msg->membership_list[i]);
+        memcpy(buffer + offset, &membership_list_element_network, sizeof(int));
+        offset += sizeof(int);
+    }
 
     // Check if the offset exceeds the buffer size
     if (offset > buffer_size)
@@ -1040,9 +972,8 @@ void serialize_message(const struct message *msg, char *buffer, int buffer_size)
         // Handle the error appropriately for your program
         return;
     }
-
-    // fprintf(stderr, "All serialization successful\n");
 }
+
 
 int write_to_socket(int socket_fd, const char *data, size_t size)
 {
@@ -1058,19 +989,19 @@ int write_to_socket(int socket_fd, const char *data, size_t size)
 // Deserialize data into a message struct
 void unserialize_message(char *buffer, int buffer_size, struct message *msg)
 {
-    // fprintf(stderr, "Top of unserialize_message\n");
     int offset = 0;
 
     // Copy each field from the buffer to the struct
     memcpy(&(msg->id), buffer + offset, sizeof(int));
+    msg->id = ntohl(msg->id);  // Convert to host byte order
     offset += sizeof(int);
 
-    // fprintf(stderr, "First unserialization successful\n");
-
     memcpy(&(msg->request_id), buffer + offset, sizeof(int));
+    msg->request_id = ntohl(msg->request_id);
     offset += sizeof(int);
 
     memcpy(&(msg->currentView_id), buffer + offset, sizeof(int));
+    msg->currentView_id = ntohl(msg->currentView_id);
     offset += sizeof(int);
 
     memcpy(&(msg->m), buffer + offset, sizeof(enum messageType));
@@ -1080,16 +1011,22 @@ void unserialize_message(char *buffer, int buffer_size, struct message *msg)
     offset += sizeof(enum operationType);
 
     memcpy(&(msg->member_count), buffer + offset, sizeof(int));
+    msg->member_count = ntohl(msg->member_count);
     offset += sizeof(int);
 
     memcpy(&(msg->peer_id), buffer + offset, sizeof(int));
-
-    // fprintf(stderr, "non membership list successful\n");
+    msg->peer_id = ntohl(msg->peer_id);
+    offset += sizeof(int);
 
     // Allocate memory for the membership_list based on member_count
     msg->membership_list = (int *)malloc(msg->member_count * sizeof(int));
-    memcpy(msg->membership_list, buffer + offset, msg->member_count * sizeof(int));
-    offset += msg->member_count * sizeof(int);
+    
+    // Convert each element in membership_list to host byte order
+    for (int i = 0; i < msg->member_count; ++i) {
+        memcpy(&(msg->membership_list[i]), buffer + offset, sizeof(int));
+        msg->membership_list[i] = ntohl(msg->membership_list[i]);
+        offset += sizeof(int);
+    }
 
     // Check if the offset exceeds the buffer size
     if (offset > buffer_size)
@@ -1098,14 +1035,13 @@ void unserialize_message(char *buffer, int buffer_size, struct message *msg)
         // Handle the error appropriately for your program
         return;
     }
-    // fprintf(stderr, "All unserialization successful\n");
 }
+
 
 int create_udp_listen(struct addrinfo hints, struct addrinfo *servinfo, struct addrinfo *p)
 {
 
     int listener_fd;
-    char ipstr[100];
     int status;
 
     memset(&hints, 0, sizeof hints);
@@ -1121,33 +1057,13 @@ int create_udp_listen(struct addrinfo hints, struct addrinfo *servinfo, struct a
 
     for (p = servinfo; p != NULL; p = p->ai_next)
     {
-        void *ina;
 
-        /** step 1 **/
-        if (p->ai_family == AF_INET)
-        { // IPv4
-            struct sockaddr_in *sa4 = (struct sockaddr_in *)p->ai_addr;
-            ina = &(sa4->sin_addr);
-        }
-        else
-        { // IPv6
-            struct sockaddr_in6 *sa6 = (struct sockaddr_in6 *)p->ai_addr;
-            ina = &(sa6->sin6_addr);
-        }
-
-        /** step 2 **/
-        inet_ntop(p->ai_family, ina, ipstr, sizeof ipstr);
-
-        // fprintf(stderr, "Listening on interface: %s\n", ipstr);
-
-        /** step 3 **/
         if ((listener_fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1)
         {
             perror("server: socket");
             continue;
         }
 
-        /** step 4 **/
         if (bind(listener_fd, p->ai_addr, p->ai_addrlen) == -1)
         {
             perror("server: bind");
@@ -1207,12 +1123,12 @@ int heartbeart_recvfrom(int listener_fd)
         const char s[2] = ".";
         char *token = strtok(host, s);
 
-        fprintf(stderr, "recieved %s from %s\n", recv_buf, token);
+        // fprintf(stderr, "recieved %s from %s\n", recv_buf, token);
         for (int i = 0; i < current_operation.member_count; i++)
         {
-            if (strstr(token, peer_list[i]) != NULL)
+            if (strcmp(token, peer_list[current_operation.membership_list[i]]) == 0)
             {
-                fprintf(stderr, "peer %d: recv_count: %d, my count: %d\n", i+1, heartbeat_list[i], heartbeat_count);
+                // fprintf(stderr, "peer %d: recv_count: %d, my count: %d\n", i+1, heartbeat_list[i], heartbeat_count);
                 heartbeat_list[i]++;
             }
         }
@@ -1222,12 +1138,14 @@ int heartbeart_recvfrom(int listener_fd)
 }
 
 void handle_peer_failure(int peer_id) {
-    fprintf(stderr, "Peer %d not reachable.\n", peer_id);
-    peer_crashed = 1;
-    
-    // struct message m;
-    // m.id = peer_id;
-    // send_req(m, DEL);
+    fprintf(stderr, "Peer %d not reachable.\n", peer_id + 1);
+    if (is_leader == 1 && peer_crashed == 0) {
+    struct message m;
+    m.id = peer_id;
+    send_req(m, DEL);
+    //peer_crashed = 1;
+
+    }
 
     if (leader_id == peer_id && peer_crashed == 1) {
         // leader_id = peer_id + 1;
@@ -1239,38 +1157,60 @@ void handle_peer_failure(int peer_id) {
     }
 }
 
-int heartbeat_send()
+int heartbeat_send(struct addrinfo hints, struct addrinfo *servinfo, struct addrinfo *p)
 {
-    if (is_leader == 0 && current_operation.member_count == 0) {
-        return 0;
-    }
-    if (is_leader == 1 && current_operation.member_count == 1) {
-        return 0;
-    }
     int status;
     int send_fd;
     char send_buf[] = "HEARTBEAT";
+
+        for(int g = 0; g < current_operation.member_count; g++) {
+
+        memset(&hints, 0, sizeof hints);
+        memset(&servinfo, 0, sizeof servinfo);
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_DGRAM;
+        hints.ai_flags = AI_PASSIVE;
+        
+       // fprintf(stderr, "hostname: %s\n", hosts[g]);
+        status = getaddrinfo(peer_list[current_operation.membership_list[g]], UDP, &hints, &servinfo);
+
+        if(status != 0) {
+            // fprintf(stderr, "getaddrinfo-talker: %s\n", gai_strerror(status));
+           // exit(1);
+           continue;
+        }
+
+     for(p = servinfo; p != NULL; p = p->ai_next) {
+        send_fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (send_fd == -1) {
+            perror("peer: socket");
+            continue;
+        }
+        break;
+
+     }
+
+    if (sendto(send_fd, send_buf, strlen(send_buf), MSG_DONTWAIT, p->ai_addr, p->ai_addrlen) == -1) {
+                fprintf(stderr, "Error pinging host: %d\n", current_operation.membership_list[g]);
+                exit(1);
+            }
+        }
+
+
     for (int g = 0; g < current_operation.member_count; g++)
     {
 
-                // fprintf(stderr, "peer %d, heartbeat[]: %d, %d, \n", g+1,heartbeat_list[g], heartbeat_count);
+//                 // fprintf(stderr, "peer %d, heartbeat[]: %d, %d, \n", g+1,heartbeat_list[g], heartbeat_count);
                if (heartbeat_list[g] + 2 < heartbeat_count)
     {
-                    handle_peer_failure(g + 1);
+                    handle_peer_failure(current_operation.membership_list[g]);
 
     }
-// fprintf(stderr, "checkiing if it passes heart_beat list check\n");
-
-
-        if (sendto(udp_fd[g], send_buf, strlen(send_buf), 0, udp_addr_list[g], udp_addr_len[g]) == -1)
-        {
-            fprintf(stderr, "Error pinging host: %s\n", peer_list[g]);
-            exit(1);
-        }
-
-        fprintf(stderr, "sent HEARTBEAT to %d\n", g+1);
-
     }
+
+        // fprintf(stderr, "sent HEARTBEAT to %d\n", g+1);
+
+//     }
 
 
     pthread_mutex_lock(&hb_mutex);
@@ -1281,10 +1221,13 @@ int heartbeat_send()
 }
 
 
+
+
 void *timerThread(void *arg) {
+    struct addrinfo hints, *servinfo, *p;
     while(1) {
-    heartbeat_send();
-    sleep(5); // Simulating a timer for 5 seconds
+    heartbeat_send(hints, servinfo, p);
+    sleep(1); // Simulating a timer for 5 seconds
     }
 }
 
