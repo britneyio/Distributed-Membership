@@ -1,0 +1,9 @@
+ A REPORT describing the system architectures, state diagrams, design decisions, and im-
+plementation issues
+
+My program uses enums operationType and messageType that is put into a message struct that is sent in sockets.
+I had implementations issues where the arrays data would get out of order, but by using ntohl and htonl to correct the byte order
+while sending and receiving through the socket, I was able to correct that problem. I decided to send values to every peer including itself because it was easier to understand that way. Most of the issues
+that occured were C specific problems like segmentation faults, learning about serialization and how to do that in C, and memory allocation with malloc, realloc, and memset/memcpy. 
+I split the  methods between sending from the leader and sending from a peer, and similarly with receiving so that it was to easy to find the exact method that wasn't working. I created a pthread
+for the heartbeat signal so that the signals wouldn't interfere with each other and can send correctly. 

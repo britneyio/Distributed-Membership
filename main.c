@@ -1179,13 +1179,13 @@ int heartbeart_recvfrom(int listener_fd)
         const char s[2] = ".";
         char *token = strtok(host, s);
 
-        // fprintf(stderr, "recieved %s from %s\n", recv_buf, token);
+        fprintf(stderr, "recieved %s from %s\n", recv_buf, token);
         for (int i = 0; i < current_operation.member_count; i++)
         {
             if (strcmp(token, peer_list[current_operation.membership_list[i]]) == 0)
             {
                 // fprintf(stderr, "peer %d: recv_count: %d, my count: %d\n", i+1, heartbeat_list[i], heartbeat_count);
-                heartbeat_list[i]++;
+                heartbeat_list[current_operation.membership_list[i]]++;
             }
         }
     }
@@ -1194,16 +1194,18 @@ int heartbeart_recvfrom(int listener_fd)
 }
 
 void handle_peer_failure(int peer_id) {
-    fprintf(stderr, "Peer %d not reachable.\n", peer_id + 1);
     if (is_leader == 1 && peer_crashed == 0) {
+            fprintf(stderr, "Peer %d not reachable.\n", peer_id + 1);
     struct message m;
     m.id = peer_id;
     send_req(m, DEL);
-    peer_crashed = 1;
+    //peer_crashed = 1;
 
     }
 
-    if (is_leader == 0 && leader_id == peer_id) {
+    if (is_leader == 0 && leader_id == peer_id ) {
+            fprintf(stderr, "Peer %d not reachable.\n", peer_id + 1);
+
         leader_delete_member(peer_id);
         current_operation.member_count--;
         fprintf(stderr, "deleting old leader from list: ");
@@ -1264,17 +1266,13 @@ int heartbeat_send(struct addrinfo hints, struct addrinfo *servinfo, struct addr
     for (int g = 0; g < current_operation.member_count; g++)
     {
 
-//                 // fprintf(stderr, "peer %d, heartbeat[]: %d, %d, \n", g+1,heartbeat_list[g], heartbeat_count);
-               if (heartbeat_list[g] + 2 < heartbeat_count)
+                fprintf(stderr, "peer %d, heartbeat[]: %d, %d, \n", g+1,heartbeat_list[current_operation.membership_list[g]], heartbeat_count);
+               if (heartbeat_list[current_operation.membership_list[g]] + 2 < heartbeat_count)
     {
-                    handle_peer_failure(current_operation.membership_list[g]);
+                    handle_peer_failure(current_operation.membership_list[current_operation.membership_list[g]]);
 
     }
     }
-
-        // fprintf(stderr, "sent HEARTBEAT to %d\n", g+1);
-
-//     }
 
 
     pthread_mutex_lock(&hb_mutex);
@@ -1291,7 +1289,7 @@ void *timerThread(void *arg) {
     struct addrinfo hints, *servinfo, *p;
     while(1) {
     heartbeat_send(hints, servinfo, p);
-    sleep(1); // Simulating a timer for 5 seconds
+    sleep(2); // Simulating a timer for 5 seconds
     }
 }
 
