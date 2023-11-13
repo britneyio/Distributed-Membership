@@ -355,7 +355,8 @@ int message_type_determination(struct message received, int fd)
             ok_count = 0;
         }
 
-        if (1 == is_leader && received.op == DEL && ok_count == current_operation.member_count - 1) {
+        if (1 == is_leader && received.op == DEL && ok_count >= current_operation.member_count - 1) {
+
             receive_ok_newview(received);
             ok_count = 0;
         }
@@ -372,11 +373,30 @@ int message_type_determination(struct message received, int fd)
             sleep(crash_delay);
             exit(0);
         }
+
+        if (current_operation.member_count == 5 && leader_will_crash == 1)
+        {
+            struct message m;
+            m.id = 4;
+            send_req(m, DEL);
+            sleep(2);
+            exit(0);
+        }
     }
 
     if (received.m == NEWLEADER)
     {
+        fprintf(stderr, "receiveed NEWLEADER\n");
+        if (is_leader == 0){
         receive_newleader(received);
+        }
+
+        if (is_leader == 1) {
+                struct message m;
+                m.id = received.peer_id;
+                fprintf(stderr, "op: %d", received.op);
+                send_req(m, received.op);
+        }
     }
 
     return 0;
@@ -418,10 +438,9 @@ int send_join()
 
 int send_req(struct message recieved, enum operationType op)
 {
-    // if (op == DEL) {
-    //     leader_delete_member(recieved.id);
-    //     current_operation.member_count--;
-    // }
+    if (op == NOTHING) {
+        return 0;
+    }
     fprintf(stderr, "sending REQ\n");
     current_operation.peer_id = recieved.id;
     fprintf(stderr, "peer_id: %d\n",recieved.id);
@@ -488,7 +507,7 @@ int receive_req_send_ok(struct message received)
     m.membership_list = malloc(m.member_count * sizeof(int));
     memset(m.membership_list, 0, sizeof(int) * m.member_count);
     memcpy(m.membership_list, current_operation.membership_list, current_operation.member_count * sizeof(int));
-    print_member_array(m.membership_list, m.member_count);
+    //_array(m.membership_list, m.member_count);
     int nbytes;
     int buffer_size = sizeof(int) * 3 + sizeof(enum messageType) + sizeof(enum operationType) +
                       2 * sizeof(int) + sizeof(int) * m.member_count;
@@ -541,26 +560,25 @@ void leader_delete_member(int valueToRemove) {
     int i, j;
     int new_size = current_operation.member_count - 1;
     int *output = malloc(new_size * sizeof(int));
-    memset(output, 0, new_size * sizeof(int));
+
     // Iterate through the array to find the value
+    j = 0;
     for (i = 0; i < current_operation.member_count; ++i) {
         if (current_operation.membership_list[i] !=  valueToRemove) {
-            output[i] = current_operation.membership_list[i];
+            output[j++] = current_operation.membership_list[i];
         }
     }
-    
-    current_operation.membership_list = realloc(current_operation.membership_list , new_size * sizeof(int));
-    memset(current_operation.membership_list,0, new_size * sizeof(int));
 
-        for (int i = 0; i < new_size; i++)
-    {
+    current_operation.membership_list = realloc(current_operation.membership_list, new_size * sizeof(int));
+
+    // Copy values from output to current_operation.membership_list
+    for (int i = 0; i < new_size; i++) {
         current_operation.membership_list[i] = output[i];
     }
 
     free(output);
-
-
 }
+
 
 int receive_ok_newview(struct message received)
 {
@@ -606,7 +624,7 @@ int receive_ok_newview(struct message received)
     // fprintf(stderr, "Serialized message\n");
                 fprintf(stderr, "NEWVIEW SENT\n");
                 //print_member_array(current_operation.membership_list, current_operation.member_count);
-                print_member_array(m.membership_list, m.member_count);
+                //print_member_array(m.membership_list, m.member_count);
 
 
     for (int i = 0; i < current_operation.member_count; i++)
@@ -662,16 +680,31 @@ int send_newleader()
     m.currentView_id = current_operation.currentView_id;
     m.op = PENDING;
     m.m = NEWLEADER;
+    m.id = current_operation.id;
+    m.member_count = current_operation.member_count;
+    m.peer_id = current_operation.peer_id; // peer being added
+    m.membership_list = malloc(m.member_count * sizeof(int));
+    memset(m.membership_list, 0, m.member_count * sizeof(int));
+
+    for (int i = 0; i < m.member_count; i++)
+    {
+        m.membership_list[i] = current_operation.membership_list[i];
+    }
 
     int nbytes;
     int buffer_size = sizeof(int) * 3 + sizeof(enum messageType) + sizeof(enum operationType) +
                       2 * sizeof(int) + sizeof(int) * m.member_count;
     char *buffer = (char *)malloc(buffer_size);
+
     serialize_message(&m, buffer, buffer_size);
     fprintf(stderr, "Serialized message\n");
 
     for (int i = 0; i < current_operation.member_count; i++)
     {
+        if (current_operation.membership_list[i] == leader_id) {
+            continue;
+        }
+
         // fprintf(stderr, "current_operation.member_list[%d] : %d\n", i, current_operation.membership_list[i]);
         if ((nbytes = write_to_socket(peer_fd[current_operation.membership_list[i]], buffer, buffer_size)) != 0)
         {
@@ -682,6 +715,7 @@ int send_newleader()
             fprintf(stderr, "NEWLEADER SENT to %d\n", current_operation.membership_list[i]);
         }
     }
+    free(buffer);
     return 0;
 }
 
@@ -693,13 +727,35 @@ int receive_newleader(struct message received)
     m.request_id = received.request_id;
     m.op = current_operation.op;
     m.peer_id = current_operation.peer_id;
-    m.m = REQ;
+    m.m = NEWLEADER;
+    m.id = current_operation.id;
+    m.member_count = current_operation.member_count;
+    m.peer_id = current_operation.peer_id; // peer being added
+    m.membership_list = malloc(m.member_count * sizeof(int));
+    memset(m.membership_list, 0, m.member_count * sizeof(int));
+
+    for (int i = 0; i < m.member_count; i++)
+    {
+        m.membership_list[i] = current_operation.membership_list[i];
+    }
     int nbytes;
-    // send message m
-    if ((nbytes = write(leader_fd, &m, sizeof(m)) != sizeof(m)))
+    int buffer_size = sizeof(int) * 3 + sizeof(enum messageType) + sizeof(enum operationType) +
+                      2 * sizeof(int) + sizeof(int) * m.member_count;
+    char *buffer = (char *)malloc(buffer_size);
+    serialize_message(&m, buffer, buffer_size);
+    // fprintf(stderr, "Serialized message\n");
+
+    if ((nbytes = write_to_socket(leader_fd, buffer, buffer_size)) != 0)
     {
         fprintf(stderr, "error writing my message\n");
     }
+    else
+    {
+        fprintf(stderr, "NEWLEADER SENT\n");
+    }
+
+    //free(m.membership_list);
+    free(buffer);
 
     return 0;
 }
@@ -1143,17 +1199,26 @@ void handle_peer_failure(int peer_id) {
     struct message m;
     m.id = peer_id;
     send_req(m, DEL);
-    //peer_crashed = 1;
+    peer_crashed = 1;
 
     }
 
-    if (leader_id == peer_id && peer_crashed == 1) {
-        // leader_id = peer_id + 1;
-        // if (current_operation.id == leader_id) {
-        //     leader_fd = peer_fd[peer_id + 1];
-        //     fprintf(stderr, "Sending NEWLEADER\n");
-        //     send_newleader();
-        // }
+    if (is_leader == 0 && leader_id == peer_id) {
+        leader_fd = peer_fd[current_operation.membership_list[leader_id + 1]];
+        leader_delete_member(peer_id);
+        current_operation.member_count--;
+        fprintf(stderr, "deleting old leader from list: ");
+        print_member_array(current_operation.membership_list, current_operation.member_count);
+        heartbeat_list = realloc(heartbeat_list, (current_operation.member_count) * sizeof(int));
+        memset(heartbeat_list, 0, (current_operation.member_count) * sizeof(int));
+        pthread_mutex_lock(&hb_mutex);
+        heartbeat_count = 0;
+        pthread_mutex_unlock(&hb_mutex);
+        if (current_operation.id == leader_id + 1) {
+            is_leader = 1;
+            fprintf(stderr, "Sending NEWLEADER\n");
+            send_newleader();
+        }
     }
 }
 
